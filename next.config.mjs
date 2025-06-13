@@ -25,9 +25,27 @@ const nextConfig = {
           ".js": [".js", ".mjs"],
         },
       };
+
+      // Add fallbacks for node modules
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        path: false,
+        os: false,
+      };
     }
+
+    // Handle .mjs files properly
+    config.module.rules.push({
+      test: /\.mjs$/,
+      include: /node_modules/,
+      type: "javascript/auto",
+    });
+
     return config;
   },
+  // Ensure proper transpilation of packages
+  transpilePackages: ["@imgly/background-removal"],
 };
 
 export default nextConfig;
