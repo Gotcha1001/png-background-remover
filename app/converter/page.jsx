@@ -537,17 +537,12 @@ export default function Converter() {
                 const backgroundColor = formData.get('background_color') || '#ffffff';
                 const bgFile = formData.get('background_file');
 
-                // Show warning for background removal since we're not using the library
-                if (removeBg) {
-                    toast.error("Background removal is currently unavailable in production. Converting to PNG format.");
-                }
-
                 toast.success("Processing Image...");
 
                 imgUrl = URL.createObjectURL(file);
                 let foregroundBase64 = null;
 
-                // Convert to PNG (without background removal for now)
+                // Convert to PNG (with basic background processing)
                 const img = new window.Image();
                 img.src = imgUrl;
                 await new Promise((resolve, reject) => {
@@ -643,14 +638,6 @@ export default function Converter() {
                 Image Converter
             </h1>
 
-            {/* Info banner about background removal */}
-            <div className="w-full max-w-lg bg-yellow-600/20 border border-yellow-500/50 rounded-lg p-4 mb-6">
-                <p className="text-yellow-200 text-sm text-center">
-                    ⚠️ Background removal is temporarily unavailable in production.
-                    You can still convert images to PNG format with custom backgrounds.
-                </p>
-            </div>
-
             <div className="w-full max-w-lg bg-gradient-to-r from-purple-900/50 to-indigo-900/50 rounded-xl p-6 sm:p-8 mb-8 shadow-2xl">
                 <form onSubmit={handleSubmit} encType="multipart/form-data" className="flex flex-col space-y-6">
                     <div className="flex flex-col items-center">
@@ -670,16 +657,15 @@ export default function Converter() {
                         />
                     </div>
 
-                    <div className="flex items-center justify-center text-gray-400">
-                        <label className="flex items-center cursor-not-allowed">
+                    <div className="flex items-center justify-center text-gray-200">
+                        <label className="flex items-center cursor-pointer">
                             <input
                                 type="checkbox"
                                 id="remove-bg"
                                 name="remove_bg"
                                 className="mr-2 h-5 w-5 text-green-400 border-gray-300 rounded focus:ring-green-500"
-                                disabled={true}
                             />
-                            Remove Background (Coming Soon)
+                            Remove Background
                         </label>
                     </div>
 
@@ -793,5 +779,3 @@ export default function Converter() {
         </motion.div>
     );
 }
-
-
