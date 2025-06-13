@@ -7,11 +7,18 @@ module.exports = {
   ],
   theme: {
     extend: {
-      colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
+      textShadow: {
+        md: "0 2px 4px rgba(0, 0, 0, 0.2)",
       },
     },
   },
-  plugins: [],
+  plugins: [
+    function ({ addUtilities }) {
+      addUtilities({
+        ".text-shadow-md": {
+          textShadow: "0 2px 4px rgba(0, 0, 0, 0.2)",
+        },
+      });
+    },
+  ],
 };
