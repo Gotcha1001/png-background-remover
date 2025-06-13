@@ -514,203 +514,249 @@ export default function Converter() {
     const [downloadReady, setDownloadReady] = useState(false);
     const [backgroundOption, setBackgroundOption] = useState('transparent');
     const [isPending, startTransition] = useTransition();
+    const [bodyPixModel, setBodyPixModel] = useState(null);
     const [selfieSegmentation, setSelfieSegmentation] = useState(null);
-    const canvasRef = useRef(null);
-    const imageRef = useRef(null);
+    const [isModelLoaded, setIsModelLoaded] = useState(false);
 
-    // Initialize MediaPipe Selfie Segmentation
-    const initMediaPipe = async () => {
-        if (!selfieSegmentation) {
-            try {
-                // Load MediaPipe from CDN to avoid bundling issues
-                const script = document.createElement('script');
-                script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js';
-                script.crossOrigin = 'anonymous';
-
+    // Load MediaPipe Selfie Segmentation
+    const loadMediaPipeModel = async () => {
+        try {
+            // Load MediaPipe script dynamically
+            if (!window.SelfieSegmentation) {
                 await new Promise((resolve, reject) => {
+                    const script1 = document.createElement('script');
+                    script1.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
+                    script1.onload = () => {
+                        const script2 = document.createElement('script');
+                        script2.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js';
+                        script2.onload = () => {
+                            const script3 = document.createElement('script');
+                            script3.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js';
+                            script3.onload = () => {
+                                const script4 = document.createElement('script');
+                                script4.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js';
+                                script4.onload = resolve;
+                                script4.onerror = reject;
+                                document.head.appendChild(script4);
+                            };
+                            script3.onerror = reject;
+                            document.head.appendChild(script3);
+                        };
+                        script2.onerror = reject;
+                        document.head.appendChild(script2);
+                    };
+                    script1.onerror = reject;
+                    document.head.appendChild(script1);
+                });
+            }
+
+            const selfieSegmentation = new window.SelfieSegmentation({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`;
+                }
+            });
+
+            selfieSegmentation.setOptions({
+                modelSelection: 1, // 0 for general, 1 for landscape
+                selfieMode: false,
+            });
+
+            setSelfieSegmentation(selfieSegmentation);
+            return selfieSegmentation;
+        } catch (error) {
+            console.error('MediaPipe load failed:', error);
+            return null;
+        }
+    };
+
+    // Load BodyPix as fallback
+    const loadBodyPixModel = async () => {
+        try {
+            // Load TensorFlow.js and BodyPix from CDN
+            if (!window.tf) {
+                await new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js';
                     script.onload = resolve;
                     script.onerror = reject;
                     document.head.appendChild(script);
                 });
-
-                const SelfieSegmentation = window.SelfieSegmentation;
-                const segmentation = new SelfieSegmentation({
-                    locateFile: (file) => {
-                        return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`;
-                    }
-                });
-
-                segmentation.setOptions({
-                    modelSelection: 1, // 0 for general, 1 for landscape
-                    selfieMode: false,
-                });
-
-                setSelfieSegmentation(segmentation);
-                return segmentation;
-            } catch (error) {
-                console.error('Failed to load MediaPipe:', error);
-                return null;
             }
+
+            if (!window.bodyPix) {
+                await new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.2.1/dist/body-pix.min.js';
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
+                });
+            }
+
+            const model = await window.bodyPix.load({
+                architecture: 'MobileNetV1',
+                outputStride: 16,
+                multiplier: 0.75,
+                quantBytes: 2,
+            });
+
+            setBodyPixModel(model);
+            return model;
+        } catch (error) {
+            console.error('BodyPix load failed:', error);
+            return null;
         }
-        return selfieSegmentation;
     };
 
-    // Advanced background removal using edge detection and flood fill
-    const advancedBackgroundRemoval = async (imageElement) => {
+    // Initialize models
+    useEffect(() => {
+        const initModels = async () => {
+            if (isModelLoaded) return;
+
+            toast.info("Loading AI models... (first time only)");
+
+            // Try MediaPipe first, then BodyPix as fallback
+            const mediaPipeModel = await loadMediaPipeModel();
+            if (!mediaPipeModel) {
+                const bodyPixModel = await loadBodyPixModel();
+                if (bodyPixModel) {
+                    setIsModelLoaded(true);
+                    toast.success("Background removal ready!");
+                }
+            } else {
+                setIsModelLoaded(true);
+                toast.success("Advanced background removal ready!");
+            }
+        };
+
+        initModels();
+    }, [isModelLoaded]);
+
+    // MediaPipe background removal
+    const processWithMediaPipe = async (imageElement) => {
+        return new Promise((resolve, reject) => {
+            if (!selfieSegmentation) {
+                reject(new Error('MediaPipe not loaded'));
+                return;
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = imageElement.width;
+            canvas.height = imageElement.height;
+            const ctx = canvas.getContext('2d');
+
+            selfieSegmentation.onResults((results) => {
+                if (!results.segmentationMask) {
+                    reject(new Error('No segmentation mask'));
+                    return;
+                }
+
+                // Draw original image
+                ctx.drawImage(imageElement, 0, 0);
+
+                // Get image data
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const { data } = imageData;
+
+                // Create temporary canvas for mask
+                const maskCanvas = document.createElement('canvas');
+                maskCanvas.width = canvas.width;
+                maskCanvas.height = canvas.height;
+                const maskCtx = maskCanvas.getContext('2d');
+                maskCtx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
+
+                const maskData = maskCtx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+                // Apply mask
+                for (let i = 0; i < data.length; i += 4) {
+                    const maskValue = maskData[i]; // Red channel of mask
+                    if (maskValue < 128) { // Background pixels
+                        data[i + 3] = 0; // Set alpha to 0 (transparent)
+                    }
+                }
+
+                ctx.putImageData(imageData, 0, 0);
+                resolve(canvas.toDataURL('image/png'));
+            });
+
+            // Send image to MediaPipe
+            selfieSegmentation.send({ image: imageElement });
+        });
+    };
+
+    // BodyPix background removal
+    const processWithBodyPix = async (imageElement) => {
+        if (!bodyPixModel) {
+            throw new Error('BodyPix model not loaded');
+        }
+
+        const segmentation = await bodyPixModel.segmentPerson(imageElement, {
+            flipHorizontal: false,
+            internalResolution: 'medium',
+            segmentationThreshold: 0.7,
+        });
+
+        const canvas = document.createElement('canvas');
+        canvas.width = imageElement.width;
+        canvas.height = imageElement.height;
+        const ctx = canvas.getContext('2d');
+
+        // Draw original image
+        ctx.drawImage(imageElement, 0, 0);
+
+        // Apply segmentation mask
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const { data } = imageData;
+
+        for (let i = 0; i < data.length; i += 4) {
+            const pixelIndex = i / 4;
+            if (segmentation.data[pixelIndex] === 0) { // Background pixel
+                data[i + 3] = 0; // Set alpha to 0 (transparent)
+            }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        return canvas.toDataURL('image/png');
+    };
+
+    // Enhanced color-based background removal
+    const enhancedBackgroundRemoval = async (imageElement) => {
         const canvas = document.createElement('canvas');
         canvas.width = imageElement.width;
         canvas.height = imageElement.height;
         const ctx = canvas.getContext('2d');
 
         ctx.drawImage(imageElement, 0, 0);
+
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const { data, width, height } = imageData;
+        const { data } = imageData;
 
-        // Create a copy for processing
-        const processedData = new Uint8ClampedArray(data);
-
-        // Edge detection using Sobel operator
-        const sobelX = [-1, 0, 1, -2, 0, 2, -1, 0, 1];
-        const sobelY = [-1, -2, -1, 0, 0, 0, 1, 2, 1];
-
-        const edges = new Array(width * height).fill(0);
-
-        for (let y = 1; y < height - 1; y++) {
-            for (let x = 1; x < width - 1; x++) {
-                let pixelX = 0, pixelY = 0;
-
-                for (let i = 0; i < 9; i++) {
-                    const xi = x + (i % 3) - 1;
-                    const yi = y + Math.floor(i / 3) - 1;
-                    const idx = (yi * width + xi) * 4;
-
-                    const gray = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-                    pixelX += gray * sobelX[i];
-                    pixelY += gray * sobelY[i];
-                }
-
-                const magnitude = Math.sqrt(pixelX * pixelX + pixelY * pixelY);
-                edges[y * width + x] = magnitude > 50 ? 255 : 0;
-            }
-        }
-
-        // Background removal using multiple strategies
-        const visited = new Array(width * height).fill(false);
-
-        // Strategy 1: Remove from edges (corners typically background)
-        const floodFillFromCorners = (startX, startY) => {
-            const stack = [[startX, startY]];
-            const startIdx = startY * width + startX;
-            const startR = data[startIdx * 4];
-            const startG = data[startIdx * 4 + 1];
-            const startB = data[startIdx * 4 + 2];
-
-            while (stack.length > 0) {
-                const [x, y] = stack.pop();
-                const idx = y * width + x;
-
-                if (x < 0 || x >= width || y < 0 || y >= height || visited[idx]) continue;
-
-                const pixelIdx = idx * 4;
-                const r = data[pixelIdx];
-                const g = data[pixelIdx + 1];
-                const b = data[pixelIdx + 2];
-
-                // Color similarity threshold
-                const colorDiff = Math.abs(r - startR) + Math.abs(g - startG) + Math.abs(b - startB);
-                if (colorDiff > 100 || edges[idx] > 0) continue;
-
-                visited[idx] = true;
-                processedData[pixelIdx + 3] = 0; // Make transparent
-
-                // Add neighbors
-                stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
-            }
-        };
-
-        // Start flood fill from corners
-        floodFillFromCorners(0, 0);
-        floodFillFromCorners(width - 1, 0);
-        floodFillFromCorners(0, height - 1);
-        floodFillFromCorners(width - 1, height - 1);
-
-        // Strategy 2: Remove similar colors from edges
-        const edgePixels = [];
-        for (let x = 0; x < width; x++) {
-            edgePixels.push([x, 0], [x, height - 1]);
-        }
-        for (let y = 0; y < height; y++) {
-            edgePixels.push([0, y], [width - 1, y]);
-        }
-
-        // Collect edge colors
-        const edgeColors = edgePixels.map(([x, y]) => {
-            const idx = (y * width + x) * 4;
-            return [data[idx], data[idx + 1], data[idx + 2]];
-        });
-
-        // Remove pixels similar to edge colors
+        // Enhanced edge detection and background removal
         for (let i = 0; i < data.length; i += 4) {
             const r = data[i];
             const g = data[i + 1];
             const b = data[i + 2];
 
-            for (const [er, eg, eb] of edgeColors) {
-                const colorDiff = Math.abs(r - er) + Math.abs(g - eg) + Math.abs(b - eb);
-                if (colorDiff < 80) {
-                    processedData[i + 3] = 0;
-                    break;
-                }
+            // Multiple background detection criteria
+            const isWhiteBackground = r > 230 && g > 230 && b > 230;
+            const isBlackBackground = r < 25 && g < 25 && b < 25;
+            const isGrayBackground = Math.abs(r - g) < 15 && Math.abs(g - b) < 15 && Math.abs(r - b) < 15;
+            const isGreenScreen = g > r + 30 && g > b + 30;
+            const isBlueScreen = b > r + 30 && b > g + 30;
+
+            // Edge pixels (keep these to preserve subject outline)
+            const isEdgePixel = (i % (canvas.width * 4)) < 8 ||
+                (i % (canvas.width * 4)) > (canvas.width - 2) * 4 ||
+                i < canvas.width * 4 * 2 ||
+                i > data.length - canvas.width * 4 * 2;
+
+            if ((isWhiteBackground || isBlackBackground || isGrayBackground || isGreenScreen || isBlueScreen) && !isEdgePixel) {
+                data[i + 3] = 0; // Set alpha to 0 (transparent)
             }
         }
 
-        const newImageData = new ImageData(processedData, width, height);
-        ctx.putImageData(newImageData, 0, 0);
-
+        ctx.putImageData(imageData, 0, 0);
         return canvas.toDataURL('image/png');
-    };
-
-    // MediaPipe-based background removal
-    const processWithMediaPipe = async (imageElement) => {
-        return new Promise(async (resolve, reject) => {
-            try {
-                const segmentation = await initMediaPipe();
-                if (!segmentation) {
-                    throw new Error('Failed to initialize MediaPipe');
-                }
-
-                const canvas = document.createElement('canvas');
-                canvas.width = imageElement.width;
-                canvas.height = imageElement.height;
-                const ctx = canvas.getContext('2d');
-
-                segmentation.onResults((results) => {
-                    ctx.save();
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-                    // Draw the mask
-                    ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-
-                    // Use source-atop to keep only the person
-                    ctx.globalCompositeOperation = 'source-atop';
-                    ctx.drawImage(imageElement, 0, 0, canvas.width, canvas.height);
-
-                    ctx.restore();
-                    resolve(canvas.toDataURL('image/png'));
-                });
-
-                // Send image to MediaPipe
-                segmentation.send({ image: imageElement });
-
-                // Timeout fallback
-                setTimeout(() => {
-                    reject(new Error('MediaPipe processing timeout'));
-                }, 10000);
-
-            } catch (error) {
-                reject(error);
-            }
-        });
     };
 
     const handleSubmit = async (event) => {
@@ -751,11 +797,23 @@ export default function Converter() {
                 if (removeBg) {
                     try {
                         toast.info("Removing background with AI...");
-                        foregroundBase64 = await processWithMediaPipe(img);
-                    } catch (mediaError) {
-                        console.warn('MediaPipe failed, using advanced algorithm:', mediaError);
-                        toast.warning('AI removal failed, using advanced processing');
-                        foregroundBase64 = await advancedBackgroundRemoval(img);
+
+                        // Try MediaPipe first
+                        if (selfieSegmentation) {
+                            foregroundBase64 = await processWithMediaPipe(img);
+                        }
+                        // Then try BodyPix
+                        else if (bodyPixModel) {
+                            foregroundBase64 = await processWithBodyPix(img);
+                        }
+                        // Finally fallback to enhanced method
+                        else {
+                            foregroundBase64 = await enhancedBackgroundRemoval(img);
+                        }
+                    } catch (aiError) {
+                        console.warn('AI background removal failed, using enhanced method:', aiError);
+                        toast.warning('AI removal failed, using enhanced processing');
+                        foregroundBase64 = await enhancedBackgroundRemoval(img);
                     }
                 } else {
                     // Standard image processing without background removal
@@ -842,7 +900,7 @@ export default function Converter() {
             className="flex flex-col items-center min-h-screen py-8 px-4 sm:px-6 lg:px-8"
         >
             <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-8 text-center text-white [text-shadow:2px_2px_4px_rgba(0,0,0,0.5)]">
-                Image Converter
+                AI-Powered Image Converter
             </h1>
 
             <div className="w-full max-w-lg bg-gradient-to-r from-purple-900/50 to-indigo-900/50 rounded-xl p-6 sm:p-8 mb-8 shadow-2xl">
@@ -872,9 +930,15 @@ export default function Converter() {
                                 name="remove_bg"
                                 className="mr-2 h-5 w-5 text-green-400 border-gray-300 rounded focus:ring-green-500"
                             />
-                            Remove Background (Smart Algorithm)
+                            Remove Background (MediaPipe + BodyPix AI)
                         </label>
                     </div>
+
+                    {!isModelLoaded && (
+                        <div className="text-center text-yellow-300 text-sm">
+                            🤖 AI models loading in background...
+                        </div>
+                    )}
 
                     <div className="flex flex-col items-center text-gray-200 space-y-4">
                         <p className="font-semibold">Background Option:</p>
@@ -993,9 +1057,6 @@ export default function Converter() {
             >
                 Back to Home
             </Link>
-
-            <canvas ref={canvasRef} style={{ display: 'none' }} />
-            <img ref={imageRef} style={{ display: 'none' }} alt="" />
         </motion.div>
     );
 }
