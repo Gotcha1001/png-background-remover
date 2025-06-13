@@ -501,7 +501,7 @@
 
 'use client';
 
-import { useState, useTransition, useEffect } from 'react';
+import { useState, useTransition } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { processImage } from '../api/actions/route';
@@ -515,22 +515,6 @@ export default function Converter() {
     const [downloadReady, setDownloadReady] = useState(false);
     const [backgroundOption, setBackgroundOption] = useState('transparent');
     const [isPending, startTransition] = useTransition();
-    const [removeBackground, setRemoveBackground] = useState(null);
-
-    // Dynamically import @imgly/background-removal on the client side
-    useEffect(() => {
-        import('@imgly/background-removal').then((module) => {
-            // Configure the library with proper settings
-            if (module.Config) {
-                module.Config.publicPath = '/_next/static/media/';
-            }
-            setRemoveBackground(() => module.removeBackground);
-        }).catch((err) => {
-            console.error('Failed to load background removal library:', err);
-            // Fallback: disable background removal if library fails to load
-            setError('Background removal feature unavailable. You can still convert images to PNG format.');
-        });
-    }, []);
 
     const handleSubmit = async (event) => {
         event.preventDefault();
@@ -553,89 +537,75 @@ export default function Converter() {
                 const backgroundColor = formData.get('background_color') || '#ffffff';
                 const bgFile = formData.get('background_file');
 
+                // Show warning for background removal since we're not using the library
+                if (removeBg) {
+                    toast.error("Background removal is currently unavailable in production. Converting to PNG format.");
+                }
+
                 toast.success("Processing Image...");
 
                 imgUrl = URL.createObjectURL(file);
                 let foregroundBase64 = null;
 
-                if (removeBg && removeBackground) {
-                    try {
-                        // Remove background using @imgly/background-removal
-                        const blob = await removeBackground(file, {
-                            debug: false,
-                            progress: (key, current, total) => {
-                                console.log(`Downloading ${key}: ${current} of ${total}`);
-                            }
-                        });
-                        foregroundBase64 = await new Promise((resolve) => {
-                            const reader = new FileReader();
-                            reader.onloadend = () => resolve(reader.result);
-                            reader.readAsDataURL(blob);
-                        });
-                    } catch (bgRemovalError) {
-                        console.error('Background removal failed:', bgRemovalError);
-                        setError('Background removal failed. Converting to PNG without background removal.');
-                        // Fallback to regular conversion
-                        const img = new window.Image();
-                        img.src = imgUrl;
-                        await new Promise((resolve) => (img.onload = resolve));
-                        const canvas = document.createElement('canvas');
-                        canvas.width = img.width;
-                        canvas.height = img.height;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0);
-                        foregroundBase64 = canvas.toDataURL('image/png');
-                    }
-                } else {
-                    // Convert to PNG without background removal
-                    const img = new window.Image();
-                    img.src = imgUrl;
-                    await new Promise((resolve) => (img.onload = resolve));
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0);
-                    foregroundBase64 = canvas.toDataURL('image/png');
+                // Convert to PNG (without background removal for now)
+                const img = new window.Image();
+                img.src = imgUrl;
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                });
+
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+
+                // If transparent background is requested, don't fill background
+                if (backgroundOption === 'transparent') {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                } else if (backgroundOption === 'color') {
+                    ctx.fillStyle = backgroundColor;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
                 }
+
+                ctx.drawImage(img, 0, 0);
+                foregroundBase64 = canvas.toDataURL('image/png');
 
                 let outputBase64 = foregroundBase64;
 
-                if (removeBg && backgroundOption === 'image' && bgFile && bgFile.size > 0) {
+                // Handle custom background image
+                if (backgroundOption === 'image' && bgFile && bgFile.size > 0) {
                     const bgImg = new window.Image();
                     bgImgUrl = URL.createObjectURL(bgFile);
                     bgImg.src = bgImgUrl;
-                    await new Promise((resolve) => (bgImg.onload = resolve));
+                    await new Promise((resolve, reject) => {
+                        bgImg.onload = resolve;
+                        bgImg.onerror = reject;
+                    });
 
                     const fgImg = new window.Image();
                     fgImg.src = foregroundBase64;
-                    await new Promise((resolve) => (fgImg.onload = resolve));
+                    await new Promise((resolve, reject) => {
+                        fgImg.onload = resolve;
+                        fgImg.onerror = reject;
+                    });
 
-                    const canvas = document.createElement('canvas');
-                    canvas.width = bgImg.width;
-                    canvas.height = bgImg.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+                    const compositeCanvas = document.createElement('canvas');
+                    compositeCanvas.width = Math.max(bgImg.width, fgImg.width);
+                    compositeCanvas.height = Math.max(bgImg.height, fgImg.height);
+                    const compositeCtx = compositeCanvas.getContext('2d');
 
+                    // Draw background image, scaled to fill canvas
+                    compositeCtx.drawImage(bgImg, 0, 0, compositeCanvas.width, compositeCanvas.height);
+
+                    // Center the foreground image
                     const fgWidth = fgImg.width;
                     const fgHeight = fgImg.height;
-                    const xOffset = (canvas.width - fgWidth) / 2;
-                    const yOffset = (canvas.height - fgHeight) / 2;
-                    ctx.drawImage(fgImg, xOffset, yOffset, fgWidth, fgHeight);
+                    const xOffset = (compositeCanvas.width - fgWidth) / 2;
+                    const yOffset = (compositeCanvas.height - fgHeight) / 2;
+                    compositeCtx.drawImage(fgImg, xOffset, yOffset, fgWidth, fgHeight);
 
-                    outputBase64 = canvas.toDataURL('image/png');
-                } else if (removeBg && backgroundOption === 'color') {
-                    const img = new window.Image();
-                    img.src = foregroundBase64;
-                    await new Promise((resolve) => (img.onload = resolve));
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.fillStyle = backgroundColor;
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    ctx.drawImage(img, 0, 0);
-                    outputBase64 = canvas.toDataURL('image/png');
+                    outputBase64 = compositeCanvas.toDataURL('image/png');
                 }
 
                 const result = await processImage(formData);
@@ -645,9 +615,12 @@ export default function Converter() {
                     setPreviewImage(outputBase64);
                     setForegroundImage(foregroundBase64);
                     setDownloadReady(true);
+                    toast.success("Image converted successfully!");
                 }
             } catch (err) {
+                console.error('Image processing error:', err);
                 setError(`Error processing image: ${err.message}`);
+                toast.error("Failed to process image");
             } finally {
                 if (imgUrl) URL.revokeObjectURL(imgUrl);
                 if (bgImgUrl) URL.revokeObjectURL(bgImgUrl);
@@ -667,8 +640,17 @@ export default function Converter() {
             className="flex flex-col items-center min-h-screen py-8 px-4 sm:px-6 lg:px-8"
         >
             <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-8 text-center text-white [text-shadow:2px_2px_4px_rgba(0,0,0,0.5)]">
-                Convert or Remove Background
+                Image Converter
             </h1>
+
+            {/* Info banner about background removal */}
+            <div className="w-full max-w-lg bg-yellow-600/20 border border-yellow-500/50 rounded-lg p-4 mb-6">
+                <p className="text-yellow-200 text-sm text-center">
+                    ⚠️ Background removal is temporarily unavailable in production.
+                    You can still convert images to PNG format with custom backgrounds.
+                </p>
+            </div>
+
             <div className="w-full max-w-lg bg-gradient-to-r from-purple-900/50 to-indigo-900/50 rounded-xl p-6 sm:p-8 mb-8 shadow-2xl">
                 <form onSubmit={handleSubmit} encType="multipart/form-data" className="flex flex-col space-y-6">
                     <div className="flex flex-col items-center">
@@ -676,7 +658,7 @@ export default function Converter() {
                             htmlFor="file-input"
                             className="inline-block bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl cursor-pointer"
                         >
-                            Choose Foreground Image
+                            Choose Image
                         </label>
                         <input
                             type="file"
@@ -687,18 +669,20 @@ export default function Converter() {
                             className="hidden"
                         />
                     </div>
-                    <div className="flex items-center justify-center text-gray-200">
-                        <label className="flex items-center cursor-pointer">
+
+                    <div className="flex items-center justify-center text-gray-400">
+                        <label className="flex items-center cursor-not-allowed">
                             <input
                                 type="checkbox"
                                 id="remove-bg"
                                 name="remove_bg"
                                 className="mr-2 h-5 w-5 text-green-400 border-gray-300 rounded focus:ring-green-500"
-                                disabled={!removeBackground}
+                                disabled={true}
                             />
-                            Remove Background {!removeBackground && '(Loading...)'}
+                            Remove Background (Coming Soon)
                         </label>
                     </div>
+
                     <div className="flex flex-col items-center text-gray-200 space-y-4">
                         <p className="font-semibold">Background Option:</p>
                         <label className="flex items-center">
@@ -721,13 +705,13 @@ export default function Converter() {
                                 onChange={handleBackgroundOptionChange}
                                 className="mr-2 h-4 w-4 text-green-400 border-gray-300 focus:ring-green-500"
                             />
-                            Custom Image
+                            Custom Background Image
                         </label>
                         {backgroundOption === 'image' && (
                             <div className="flex flex-col items-center">
                                 <label
                                     htmlFor="bg-file-input"
-                                    className="inline-block bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl cursor-pointer"
+                                    className="inline-block bg-gradient-to-r from-blue-500 to-blue-400 text-white py-2 px-6 rounded-lg font-semibold shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl cursor-pointer"
                                 >
                                     Choose Background Image
                                 </label>
@@ -749,15 +733,18 @@ export default function Converter() {
                                 onChange={handleBackgroundOptionChange}
                                 className="mr-2 h-4 w-4 text-green-400 border-gray-300 focus:ring-green-500"
                             />
-                            Solid Color
+                            Solid Color Background
                         </label>
                         {backgroundOption === 'color' && (
-                            <input
-                                type="color"
-                                name="background_color"
-                                defaultValue="#ffffff"
-                                className="w-12 h-8 border-none rounded cursor-pointer"
-                            />
+                            <div className="flex items-center space-x-2">
+                                <input
+                                    type="color"
+                                    name="background_color"
+                                    defaultValue="#ffffff"
+                                    className="w-12 h-8 border-none rounded cursor-pointer"
+                                />
+                                <span className="text-sm text-gray-300">Choose color</span>
+                            </div>
                         )}
                     </div>
                     <button
@@ -765,7 +752,7 @@ export default function Converter() {
                         className="w-full bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
                         disabled={isPending}
                     >
-                        {isPending ? 'Processing...' : 'Process Image'}
+                        {isPending ? 'Processing...' : 'Convert to PNG'}
                     </button>
                 </form>
                 {error && (
@@ -799,13 +786,12 @@ export default function Converter() {
             )}
             <Link
                 href="/"
-                className="w-full max-w-xs bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl text-center"
+                className="w-full max-w-xs bg-gradient-to-r from-gray-600 to-gray-500 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl text-center"
             >
                 Back to Home
             </Link>
         </motion.div>
     );
 }
-
 
 
