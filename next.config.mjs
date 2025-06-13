@@ -55,7 +55,7 @@ const nextConfig = {
   experimental: {
     esmExternals: "loose",
   },
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, dev }) => {
     if (!isServer) {
       config.resolve = {
         ...config.resolve,
@@ -84,22 +84,42 @@ const nextConfig = {
       type: "javascript/auto",
     });
 
-    // Handle .wasm files for @imgly/background-removal
+    // Handle .wasm files for @imgly/background-removal and onnxruntime
     config.module.rules.push({
       test: /\.wasm$/,
-      type: "webassembly/async",
+      type: "asset/resource",
+      generator: {
+        filename: "static/wasm/[name].[hash][ext]",
+      },
+    });
+
+    // Ignore problematic ONNX runtime files
+    config.module.rules.push({
+      test: /\.wasm$/,
+      include: /node_modules\/onnxruntime-web/,
+      type: "asset/resource",
     });
 
     // Experiments for WebAssembly
     config.experiments = {
       ...config.experiments,
       asyncWebAssembly: true,
+      layers: true,
     };
+
+    // Ignore specific files that cause issues
+    config.ignoreWarnings = [
+      { module: /node_modules\/onnxruntime-web/ },
+      { message: /Failed to parse source map/ },
+    ];
 
     return config;
   },
   // Ensure proper transpilation of packages
-  transpilePackages: ["@imgly/background-removal"],
+  transpilePackages: ["@imgly/background-removal", "onnxruntime-web"],
+
+  // Output configuration
+  output: "standalone",
 
   // Add headers to allow cross-origin requests for model files
   async headers() {
