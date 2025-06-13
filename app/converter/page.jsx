@@ -501,10 +501,9 @@
 
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState, useTransition, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { processImage } from '../api/actions/route';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 
@@ -515,12 +514,210 @@ export default function Converter() {
     const [downloadReady, setDownloadReady] = useState(false);
     const [backgroundOption, setBackgroundOption] = useState('transparent');
     const [isPending, startTransition] = useTransition();
+    const [selfieSegmentation, setSelfieSegmentation] = useState(null);
+    const canvasRef = useRef(null);
+    const imageRef = useRef(null);
+
+    // Initialize MediaPipe Selfie Segmentation
+    const initMediaPipe = async () => {
+        if (!selfieSegmentation) {
+            try {
+                // Load MediaPipe from CDN to avoid bundling issues
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js';
+                script.crossOrigin = 'anonymous';
+
+                await new Promise((resolve, reject) => {
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
+                });
+
+                const SelfieSegmentation = window.SelfieSegmentation;
+                const segmentation = new SelfieSegmentation({
+                    locateFile: (file) => {
+                        return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`;
+                    }
+                });
+
+                segmentation.setOptions({
+                    modelSelection: 1, // 0 for general, 1 for landscape
+                    selfieMode: false,
+                });
+
+                setSelfieSegmentation(segmentation);
+                return segmentation;
+            } catch (error) {
+                console.error('Failed to load MediaPipe:', error);
+                return null;
+            }
+        }
+        return selfieSegmentation;
+    };
+
+    // Advanced background removal using edge detection and flood fill
+    const advancedBackgroundRemoval = async (imageElement) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = imageElement.width;
+        canvas.height = imageElement.height;
+        const ctx = canvas.getContext('2d');
+
+        ctx.drawImage(imageElement, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const { data, width, height } = imageData;
+
+        // Create a copy for processing
+        const processedData = new Uint8ClampedArray(data);
+
+        // Edge detection using Sobel operator
+        const sobelX = [-1, 0, 1, -2, 0, 2, -1, 0, 1];
+        const sobelY = [-1, -2, -1, 0, 0, 0, 1, 2, 1];
+
+        const edges = new Array(width * height).fill(0);
+
+        for (let y = 1; y < height - 1; y++) {
+            for (let x = 1; x < width - 1; x++) {
+                let pixelX = 0, pixelY = 0;
+
+                for (let i = 0; i < 9; i++) {
+                    const xi = x + (i % 3) - 1;
+                    const yi = y + Math.floor(i / 3) - 1;
+                    const idx = (yi * width + xi) * 4;
+
+                    const gray = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+                    pixelX += gray * sobelX[i];
+                    pixelY += gray * sobelY[i];
+                }
+
+                const magnitude = Math.sqrt(pixelX * pixelX + pixelY * pixelY);
+                edges[y * width + x] = magnitude > 50 ? 255 : 0;
+            }
+        }
+
+        // Background removal using multiple strategies
+        const visited = new Array(width * height).fill(false);
+
+        // Strategy 1: Remove from edges (corners typically background)
+        const floodFillFromCorners = (startX, startY) => {
+            const stack = [[startX, startY]];
+            const startIdx = startY * width + startX;
+            const startR = data[startIdx * 4];
+            const startG = data[startIdx * 4 + 1];
+            const startB = data[startIdx * 4 + 2];
+
+            while (stack.length > 0) {
+                const [x, y] = stack.pop();
+                const idx = y * width + x;
+
+                if (x < 0 || x >= width || y < 0 || y >= height || visited[idx]) continue;
+
+                const pixelIdx = idx * 4;
+                const r = data[pixelIdx];
+                const g = data[pixelIdx + 1];
+                const b = data[pixelIdx + 2];
+
+                // Color similarity threshold
+                const colorDiff = Math.abs(r - startR) + Math.abs(g - startG) + Math.abs(b - startB);
+                if (colorDiff > 100 || edges[idx] > 0) continue;
+
+                visited[idx] = true;
+                processedData[pixelIdx + 3] = 0; // Make transparent
+
+                // Add neighbors
+                stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+            }
+        };
+
+        // Start flood fill from corners
+        floodFillFromCorners(0, 0);
+        floodFillFromCorners(width - 1, 0);
+        floodFillFromCorners(0, height - 1);
+        floodFillFromCorners(width - 1, height - 1);
+
+        // Strategy 2: Remove similar colors from edges
+        const edgePixels = [];
+        for (let x = 0; x < width; x++) {
+            edgePixels.push([x, 0], [x, height - 1]);
+        }
+        for (let y = 0; y < height; y++) {
+            edgePixels.push([0, y], [width - 1, y]);
+        }
+
+        // Collect edge colors
+        const edgeColors = edgePixels.map(([x, y]) => {
+            const idx = (y * width + x) * 4;
+            return [data[idx], data[idx + 1], data[idx + 2]];
+        });
+
+        // Remove pixels similar to edge colors
+        for (let i = 0; i < data.length; i += 4) {
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+
+            for (const [er, eg, eb] of edgeColors) {
+                const colorDiff = Math.abs(r - er) + Math.abs(g - eg) + Math.abs(b - eb);
+                if (colorDiff < 80) {
+                    processedData[i + 3] = 0;
+                    break;
+                }
+            }
+        }
+
+        const newImageData = new ImageData(processedData, width, height);
+        ctx.putImageData(newImageData, 0, 0);
+
+        return canvas.toDataURL('image/png');
+    };
+
+    // MediaPipe-based background removal
+    const processWithMediaPipe = async (imageElement) => {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const segmentation = await initMediaPipe();
+                if (!segmentation) {
+                    throw new Error('Failed to initialize MediaPipe');
+                }
+
+                const canvas = document.createElement('canvas');
+                canvas.width = imageElement.width;
+                canvas.height = imageElement.height;
+                const ctx = canvas.getContext('2d');
+
+                segmentation.onResults((results) => {
+                    ctx.save();
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                    // Draw the mask
+                    ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
+
+                    // Use source-atop to keep only the person
+                    ctx.globalCompositeOperation = 'source-atop';
+                    ctx.drawImage(imageElement, 0, 0, canvas.width, canvas.height);
+
+                    ctx.restore();
+                    resolve(canvas.toDataURL('image/png'));
+                });
+
+                // Send image to MediaPipe
+                segmentation.send({ image: imageElement });
+
+                // Timeout fallback
+                setTimeout(() => {
+                    reject(new Error('MediaPipe processing timeout'));
+                }, 10000);
+
+            } catch (error) {
+                reject(error);
+            }
+        });
+    };
 
     const handleSubmit = async (event) => {
         event.preventDefault();
         setError(null);
-        const formData = new FormData(event.target);
 
+        const formData = new FormData(event.target);
         let imgUrl = null;
         let bgImgUrl = null;
 
@@ -540,31 +737,43 @@ export default function Converter() {
                 toast.success("Processing Image...");
 
                 imgUrl = URL.createObjectURL(file);
-                let foregroundBase64 = null;
 
-                // Convert to PNG (with basic background processing)
                 const img = new window.Image();
                 img.src = imgUrl;
+
                 await new Promise((resolve, reject) => {
                     img.onload = resolve;
                     img.onerror = reject;
                 });
 
-                const canvas = document.createElement('canvas');
-                canvas.width = img.width;
-                canvas.height = img.height;
-                const ctx = canvas.getContext('2d');
+                let foregroundBase64 = null;
 
-                // If transparent background is requested, don't fill background
-                if (backgroundOption === 'transparent') {
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                } else if (backgroundOption === 'color') {
-                    ctx.fillStyle = backgroundColor;
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                if (removeBg) {
+                    try {
+                        toast.info("Removing background with AI...");
+                        foregroundBase64 = await processWithMediaPipe(img);
+                    } catch (mediaError) {
+                        console.warn('MediaPipe failed, using advanced algorithm:', mediaError);
+                        toast.warning('AI removal failed, using advanced processing');
+                        foregroundBase64 = await advancedBackgroundRemoval(img);
+                    }
+                } else {
+                    // Standard image processing without background removal
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    const ctx = canvas.getContext('2d');
+
+                    if (backgroundOption === 'transparent') {
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    } else if (backgroundOption === 'color') {
+                        ctx.fillStyle = backgroundColor;
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    }
+
+                    ctx.drawImage(img, 0, 0);
+                    foregroundBase64 = canvas.toDataURL('image/png');
                 }
-
-                ctx.drawImage(img, 0, 0);
-                foregroundBase64 = canvas.toDataURL('image/png');
 
                 let outputBase64 = foregroundBase64;
 
@@ -573,6 +782,7 @@ export default function Converter() {
                     const bgImg = new window.Image();
                     bgImgUrl = URL.createObjectURL(bgFile);
                     bgImg.src = bgImgUrl;
+
                     await new Promise((resolve, reject) => {
                         bgImg.onload = resolve;
                         bgImg.onerror = reject;
@@ -580,6 +790,7 @@ export default function Converter() {
 
                     const fgImg = new window.Image();
                     fgImg.src = foregroundBase64;
+
                     await new Promise((resolve, reject) => {
                         fgImg.onload = resolve;
                         fgImg.onerror = reject;
@@ -598,20 +809,16 @@ export default function Converter() {
                     const fgHeight = fgImg.height;
                     const xOffset = (compositeCanvas.width - fgWidth) / 2;
                     const yOffset = (compositeCanvas.height - fgHeight) / 2;
-                    compositeCtx.drawImage(fgImg, xOffset, yOffset, fgWidth, fgHeight);
 
+                    compositeCtx.drawImage(fgImg, xOffset, yOffset, fgWidth, fgHeight);
                     outputBase64 = compositeCanvas.toDataURL('image/png');
                 }
 
-                const result = await processImage(formData);
-                if (result.error) {
-                    setError(result.error);
-                } else {
-                    setPreviewImage(outputBase64);
-                    setForegroundImage(foregroundBase64);
-                    setDownloadReady(true);
-                    toast.success("Image converted successfully!");
-                }
+                setPreviewImage(outputBase64);
+                setForegroundImage(foregroundBase64);
+                setDownloadReady(true);
+                toast.success("Image converted successfully!");
+
             } catch (err) {
                 console.error('Image processing error:', err);
                 setError(`Error processing image: ${err.message}`);
@@ -665,12 +872,13 @@ export default function Converter() {
                                 name="remove_bg"
                                 className="mr-2 h-5 w-5 text-green-400 border-gray-300 rounded focus:ring-green-500"
                             />
-                            Remove Background
+                            Remove Background (Smart Algorithm)
                         </label>
                     </div>
 
                     <div className="flex flex-col items-center text-gray-200 space-y-4">
                         <p className="font-semibold">Background Option:</p>
+
                         <label className="flex items-center">
                             <input
                                 type="radio"
@@ -682,6 +890,7 @@ export default function Converter() {
                             />
                             Transparent
                         </label>
+
                         <label className="flex items-center">
                             <input
                                 type="radio"
@@ -693,6 +902,7 @@ export default function Converter() {
                             />
                             Custom Background Image
                         </label>
+
                         {backgroundOption === 'image' && (
                             <div className="flex flex-col items-center">
                                 <label
@@ -710,6 +920,7 @@ export default function Converter() {
                                 />
                             </div>
                         )}
+
                         <label className="flex items-center">
                             <input
                                 type="radio"
@@ -721,6 +932,7 @@ export default function Converter() {
                             />
                             Solid Color Background
                         </label>
+
                         {backgroundOption === 'color' && (
                             <div className="flex items-center space-x-2">
                                 <input
@@ -733,6 +945,7 @@ export default function Converter() {
                             </div>
                         )}
                     </div>
+
                     <button
                         type="submit"
                         className="w-full bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
@@ -741,10 +954,12 @@ export default function Converter() {
                         {isPending ? 'Processing...' : 'Convert to PNG'}
                     </button>
                 </form>
+
                 {error && (
                     <p className="text-red-400 mt-4 font-medium text-center">{error}</p>
                 )}
             </div>
+
             {previewImage && (
                 <motion.div
                     initial={{ opacity: 0, scale: 0.9 }}
@@ -761,6 +976,7 @@ export default function Converter() {
                     />
                 </motion.div>
             )}
+
             {downloadReady && (
                 <a
                     href={previewImage}
@@ -770,12 +986,16 @@ export default function Converter() {
                     Download PNG
                 </a>
             )}
+
             <Link
                 href="/"
                 className="w-full max-w-xs bg-gradient-to-r from-gray-600 to-gray-500 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl text-center"
             >
                 Back to Home
             </Link>
+
+            <canvas ref={canvasRef} style={{ display: 'none' }} />
+            <img ref={imageRef} style={{ display: 'none' }} alt="" />
         </motion.div>
     );
 }
