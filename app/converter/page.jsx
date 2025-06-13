@@ -218,14 +218,292 @@
 
 
 // app/converter/page.jsx
+// 'use client';
+
+// import { useState, useTransition } from 'react';
+// import Link from 'next/link';
+// import Image from 'next/image';
+// import { processImage } from '../api/actions/route';
+// import { removeBackground } from '@imgly/background-removal';
+// import { motion } from 'framer-motion';
+// import { toast } from 'sonner';
+
+// export default function Converter() {
+//     const [previewImage, setPreviewImage] = useState(null);
+//     const [foregroundImage, setForegroundImage] = useState(null);
+//     const [error, setError] = useState(null);
+//     const [downloadReady, setDownloadReady] = useState(false);
+//     const [backgroundOption, setBackgroundOption] = useState('transparent');
+//     const [isPending, startTransition] = useTransition();
+
+//     const handleSubmit = async (event) => {
+//         event.preventDefault();
+//         setError(null);
+//         const formData = new FormData(event.target);
+
+//         let imgUrl = null;
+//         let bgImgUrl = null;
+
+//         startTransition(async () => {
+//             try {
+//                 const file = formData.get('file');
+//                 if (!file || file.size === 0) {
+//                     setError('No file uploaded');
+//                     return;
+//                 }
+
+//                 const removeBg = formData.get('remove_bg') === 'on';
+//                 const backgroundOption = formData.get('background_option') || 'transparent';
+//                 const backgroundColor = formData.get('background_color') || '#ffffff';
+//                 const bgFile = formData.get('background_file');
+
+//                 toast.success("Processing Image...")
+
+//                 imgUrl = URL.createObjectURL(file);
+//                 let foregroundBase64 = null;
+
+//                 if (removeBg) {
+//                     // Remove background using @imgly/background-removal
+//                     const blob = await removeBackground(file);
+//                     foregroundBase64 = await new Promise((resolve) => {
+//                         const reader = new FileReader();
+//                         reader.onloadend = () => resolve(reader.result);
+//                         reader.readAsDataURL(blob);
+//                     });
+//                 } else {
+//                     // Convert to PNG without background removal
+//                     const img = new window.Image();
+//                     img.src = imgUrl;
+//                     await new Promise((resolve) => (img.onload = resolve));
+//                     const canvas = document.createElement('canvas');
+//                     canvas.width = img.width;
+//                     canvas.height = img.height;
+//                     const ctx = canvas.getContext('2d');
+//                     ctx.drawImage(img, 0, 0);
+//                     foregroundBase64 = canvas.toDataURL('image/png');
+//                 }
+
+//                 let outputBase64 = foregroundBase64;
+
+//                 if (removeBg && backgroundOption === 'image' && bgFile && bgFile.size > 0) {
+//                     const bgImg = new window.Image();
+//                     bgImgUrl = URL.createObjectURL(bgFile);
+//                     bgImg.src = bgImgUrl;
+//                     await new Promise((resolve) => (bgImg.onload = resolve));
+
+//                     const fgImg = new window.Image();
+//                     fgImg.src = foregroundBase64;
+//                     await new Promise((resolve) => (fgImg.onload = resolve));
+
+//                     const canvas = document.createElement('canvas');
+//                     canvas.width = bgImg.width;
+//                     canvas.height = bgImg.height;
+//                     const ctx = canvas.getContext('2d');
+//                     ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+
+//                     // Center the foreground image
+//                     const fgWidth = fgImg.width;
+//                     const fgHeight = fgImg.height;
+//                     const xOffset = (canvas.width - fgWidth) / 2;
+//                     const yOffset = (canvas.height - fgHeight) / 2;
+//                     ctx.drawImage(fgImg, xOffset, yOffset, fgWidth, fgHeight);
+
+//                     outputBase64 = canvas.toDataURL('image/png');
+//                 } else if (removeBg && backgroundOption === 'color') {
+//                     const img = new window.Image();
+//                     img.src = foregroundBase64;
+//                     await new Promise((resolve) => (img.onload = resolve));
+//                     const canvas = document.createElement('canvas');
+//                     canvas.width = img.width;
+//                     canvas.height = img.height;
+//                     const ctx = canvas.getContext('2d');
+//                     ctx.fillStyle = backgroundColor;
+//                     ctx.fillRect(0, 0, canvas.width, canvas.height);
+//                     ctx.drawImage(img, 0, 0);
+//                     outputBase64 = canvas.toDataURL('image/png');
+//                 }
+
+//                 // Validate with server action
+//                 const result = await processImage(formData);
+//                 if (result.error) {
+//                     setError(result.error);
+//                 } else {
+//                     setPreviewImage(outputBase64);
+//                     setForegroundImage(foregroundBase64);
+//                     setDownloadReady(true);
+//                 }
+//             } catch (err) {
+//                 setError(`Error processing image: ${err.message}`);
+//             } finally {
+//                 if (imgUrl) URL.revokeObjectURL(imgUrl);
+//                 if (bgImgUrl) URL.revokeObjectURL(bgImgUrl);
+//             }
+//         });
+//     };
+
+//     const handleBackgroundOptionChange = (e) => {
+//         setBackgroundOption(e.target.value);
+//     };
+
+//     return (
+//         <motion.div
+//             initial={{ opacity: 0, y: 20 }}
+//             animate={{ opacity: 1, y: 0 }}
+//             transition={{ duration: 0.8 }}
+//             className="flex flex-col items-center min-h-screen py-8 px-4 sm:px-6 lg:px-8"
+//         >
+//             <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-8 text-center text-white [text-shadow:2px_2px_4px_rgba(0,0,0,0.5)]">
+//                 Convert or Remove Background
+//             </h1>
+//             <div className="w-full max-w-lg bg-gradient-to-r from-purple-900/50 to-indigo-900/50 rounded-xl p-6 sm:p-8 mb-8 shadow-2xl">
+//                 <form onSubmit={handleSubmit} encType="multipart/form-data" className="flex flex-col space-y-6">
+//                     <div className="flex flex-col items-center">
+//                         <label
+//                             htmlFor="file-input"
+//                             className="inline-block bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl cursor-pointer"
+//                         >
+//                             Choose Foreground Image
+//                         </label>
+//                         <input
+//                             type="file"
+//                             name="file"
+//                             accept="image/*"
+//                             required
+//                             id="file-input"
+//                             className="hidden"
+//                         />
+//                     </div>
+//                     <div className="flex items-center justify-center text-gray-200">
+//                         <label className="flex items-center cursor-pointer">
+//                             <input
+//                                 type="checkbox"
+//                                 id="remove-bg"
+//                                 name="remove_bg"
+//                                 className="mr-2 h-5 w-5 text-green-400 border-gray-300 rounded focus:ring-green-500"
+//                             />
+//                             Remove Background
+//                         </label>
+//                     </div>
+//                     <div className="flex flex-col items-center text-gray-200 space-y-4">
+//                         <p className="font-semibold">Background Option:</p>
+//                         <label className="flex items-center">
+//                             <input
+//                                 type="radio"
+//                                 name="background_option"
+//                                 value="transparent"
+//                                 checked={backgroundOption === 'transparent'}
+//                                 onChange={handleBackgroundOptionChange}
+//                                 className="mr-2 h-4 w-4 text-green-400 border-gray-300 focus:ring-green-500"
+//                             />
+//                             Transparent
+//                         </label>
+//                         <label className="flex items-center">
+//                             <input
+//                                 type="radio"
+//                                 name="background_option"
+//                                 value="image"
+//                                 checked={backgroundOption === 'image'}
+//                                 onChange={handleBackgroundOptionChange}
+//                                 className="mr-2 h-4 w-4 text-green-400 border-gray-300 focus:ring-green-500"
+//                             />
+//                             Custom Image
+//                         </label>
+//                         {backgroundOption === 'image' && (
+//                             <div className="flex flex-col items-center">
+//                                 <label
+//                                     htmlFor="bg-file-input"
+//                                     className="inline-block bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl cursor-pointer"
+//                                 >
+//                                     Choose Background Image
+//                                 </label>
+//                                 <input
+//                                     type="file"
+//                                     name="background_file"
+//                                     accept="image/*"
+//                                     id="bg-file-input"
+//                                     className="hidden"
+//                                 />
+//                             </div>
+//                         )}
+//                         <label className="flex items-center">
+//                             <input
+//                                 type="radio"
+//                                 name="background_option"
+//                                 value="color"
+//                                 checked={backgroundOption === 'color'}
+//                                 onChange={handleBackgroundOptionChange}
+//                                 className="mr-2 h-4 w-4 text-green-400 border-gray-300 focus:ring-green-500"
+//                             />
+//                             Solid Color
+//                         </label>
+//                         {backgroundOption === 'color' && (
+//                             <input
+//                                 type="color"
+//                                 name="background_color"
+//                                 defaultValue="#ffffff"
+//                                 className="w-12 h-8 border-none rounded cursor-pointer"
+//                             />
+//                         )}
+//                     </div>
+//                     <button
+//                         type="submit"
+//                         className="w-full bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+//                         disabled={isPending}
+//                     >
+//                         {isPending ? 'Processing...' : 'Process Image'}
+//                     </button>
+//                 </form>
+//                 {error && (
+//                     <p className="text-red-400 mt-4 font-medium text-center">{error}</p>
+//                 )}
+//             </div>
+//             {previewImage && (
+//                 <motion.div
+//                     initial={{ opacity: 0, scale: 0.9 }}
+//                     animate={{ opacity: 1, scale: 1 }}
+//                     transition={{ duration: 0.5 }}
+//                     className="w-full max-w-2xl bg-gradient-to-r from-purple-900 via-indigo-500 to-black rounded-xl overflow-hidden shadow-xl mb-8"
+//                 >
+//                     <Image
+//                         src={previewImage}
+//                         alt="Processed Image"
+//                         width={600}
+//                         height={400}
+//                         className="w-full h-auto max-h-96 object-contain transition-transform duration-300 hover:scale-105"
+//                     />
+//                 </motion.div>
+//             )}
+//             {downloadReady && (
+//                 <a
+//                     href={previewImage}
+//                     download="converted_image.png"
+//                     className="w-full max-w-xs bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl text-center mb-4"
+//                 >
+//                     Download PNG
+//                 </a>
+//             )}
+//             <Link
+//                 href="/"
+//                 className="w-full max-w-xs bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl text-center"
+//             >
+//                 Back to Home
+//             </Link>
+//         </motion.div>
+//     );
+// }
+
+
+
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState, useTransition, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { processImage } from '../api/actions/route';
 import { removeBackground } from '@imgly/background-removal';
 import { motion } from 'framer-motion';
+import { toast } from 'sonner';
+import confetti from 'canvas-confetti';
 
 export default function Converter() {
     const [previewImage, setPreviewImage] = useState(null);
@@ -234,6 +512,20 @@ export default function Converter() {
     const [downloadReady, setDownloadReady] = useState(false);
     const [backgroundOption, setBackgroundOption] = useState('transparent');
     const [isPending, startTransition] = useTransition();
+
+    // Trigger confetti when previewImage is set
+    useEffect(() => {
+        if (previewImage && downloadReady) {
+            // Fire confetti effect
+            confetti({
+                particleCount: 300,
+                spread: 200,
+                origin: { y: 0.6 }, // Center confetti vertically
+                colors: ['#10B981', '#34D399', '#6EE7B7', '#8B5CF6', '#7C3AED', '#6366F1', '#4F46E5',], // Green shades to match theme
+                zIndex: 1000, // Ensure confetti is above other elements
+            });
+        }
+    }, [previewImage, downloadReady]);
 
     const handleSubmit = async (event) => {
         event.preventDefault();
@@ -256,11 +548,12 @@ export default function Converter() {
                 const backgroundColor = formData.get('background_color') || '#ffffff';
                 const bgFile = formData.get('background_file');
 
+                toast.success('Processing Image...');
+
                 imgUrl = URL.createObjectURL(file);
                 let foregroundBase64 = null;
 
                 if (removeBg) {
-                    // Remove background using @imgly/background-removal
                     const blob = await removeBackground(file);
                     foregroundBase64 = await new Promise((resolve) => {
                         const reader = new FileReader();
@@ -268,7 +561,6 @@ export default function Converter() {
                         reader.readAsDataURL(blob);
                     });
                 } else {
-                    // Convert to PNG without background removal
                     const img = new window.Image();
                     img.src = imgUrl;
                     await new Promise((resolve) => (img.onload = resolve));
@@ -298,7 +590,6 @@ export default function Converter() {
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
 
-                    // Center the foreground image
                     const fgWidth = fgImg.width;
                     const fgHeight = fgImg.height;
                     const xOffset = (canvas.width - fgWidth) / 2;
@@ -320,7 +611,6 @@ export default function Converter() {
                     outputBase64 = canvas.toDataURL('image/png');
                 }
 
-                // Validate with server action
                 const result = await processImage(formData);
                 if (result.error) {
                     setError(result.error);
@@ -347,77 +637,89 @@ export default function Converter() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8 }}
-            className="container px-4 sm:px-6 lg:px-8"
+            className="flex flex-col items-center min-h-screen py-8 px-4 sm:px-6 lg:px-8"
         >
-            <h1 className="text-4xl font-bold mb-6 text-shadow-md">Convert or Remove Background</h1>
-            <div className="bg-[#1a0f2e] rounded-xl p-6 sm:p-8 mb-8 shadow-2xl">
-                <form onSubmit={handleSubmit} encType="multipart/form-data" className="space-y-4">
-                    <div className="relative inline-block">
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-8 text-center text-white [text-shadow:2px_2px_4px_rgba(0,0,0,0.5)]">
+                Convert or Remove Background
+            </h1>
+            <div className="w-full max-w-lg bg-gradient-to-r from-purple-900/50 to-indigo-900/50 rounded-xl p-6 sm:p-8 mb-8 shadow-2xl">
+                <form onSubmit={handleSubmit} encType="multipart/form-data" className="flex flex-col space-y-6">
+                    <div className="flex flex-col items-center">
+                        <label
+                            htmlFor="file-input"
+                            className="inline-block bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl cursor-pointer"
+                        >
+                            Choose Foreground Image
+                        </label>
                         <input
                             type="file"
                             name="file"
                             accept="image/*"
                             required
                             id="file-input"
-                            className="opacity-0 absolute w-full h-full cursor-pointer"
+                            className="hidden"
                         />
-                        <label htmlFor="file-input" className="btn">Choose Foreground Image</label>
                     </div>
-                    <div className="text-gray-200">
-                        <label className="inline-flex items-center">
+                    <div className="flex items-center justify-center text-gray-200">
+                        <label className="flex items-center cursor-pointer">
                             <input
                                 type="checkbox"
                                 id="remove-bg"
                                 name="remove_bg"
-                                className="mr-2 accent-green-400"
+                                className="mr-2 h-5 w-5 text-green-400 border-gray-300 rounded focus:ring-green-500"
                             />
                             Remove Background
                         </label>
                     </div>
-                    <div className="text-gray-200">
-                        <p>Background Option:</p>
-                        <label className="block">
+                    <div className="flex flex-col items-center text-gray-200 space-y-4">
+                        <p className="font-semibold">Background Option:</p>
+                        <label className="flex items-center">
                             <input
                                 type="radio"
                                 name="background_option"
                                 value="transparent"
                                 checked={backgroundOption === 'transparent'}
                                 onChange={handleBackgroundOptionChange}
-                                className="mr-2"
+                                className="mr-2 h-4 w-4 text-green-400 border-gray-300 focus:ring-green-500"
                             />
                             Transparent
                         </label>
-                        <label className="block">
+                        <label className="flex items-center">
                             <input
                                 type="radio"
                                 name="background_option"
                                 value="image"
                                 checked={backgroundOption === 'image'}
                                 onChange={handleBackgroundOptionChange}
-                                className="mr-2"
+                                className="mr-2 h-4 w-4 text-green-400 border-gray-300 focus:ring-green-500"
                             />
                             Custom Image
                         </label>
                         {backgroundOption === 'image' && (
-                            <div className="relative inline-block">
+                            <div className="flex flex-col items-center">
+                                <label
+                                    htmlFor="bg-file-input"
+                                    className="inline-block bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl cursor-pointer"
+                                >
+                                    Choose Background Image
+                                </label>
                                 <input
                                     type="file"
                                     name="background_file"
                                     accept="image/*"
                                     id="bg-file-input"
-                                    className="opacity-0 absolute w-full h-full cursor-pointer"
+                                    className="hidden"
                                 />
-                                <label htmlFor="bg-file-input" className="btn">Choose Background Image</label>
                             </div>
                         )}
-                        <label className="block">
+                        <label className="flex items-center">
                             <input
                                 type="radio"
                                 name="background_option"
                                 value="color"
                                 checked={backgroundOption === 'color'}
                                 onChange={handleBackgroundOptionChange}
-                                className="mr-2"
+                                className="mr-2 h-4 w-4 text-green-400 border-gray-300 focus:ring-green-500"
                             />
                             Solid Color
                         </label>
@@ -426,31 +728,49 @@ export default function Converter() {
                                 type="color"
                                 name="background_color"
                                 defaultValue="#ffffff"
-                                className="w-12 h-8 border-none cursor-pointer"
+                                className="w-12 h-8 border-none rounded cursor-pointer"
                             />
                         )}
                     </div>
-                    <button type="submit" className="btn w-full sm:w-auto" disabled={isPending}>
+                    <button
+                        type="submit"
+                        className="w-full bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={isPending}
+                    >
                         {isPending ? 'Processing...' : 'Process Image'}
                     </button>
                 </form>
-                {error && <p className="text-red-400 mt-4 font-medium">{error}</p>}
+                {error && <p className="text-red-400 mt-4 font-medium text-center">{error}</p>}
             </div>
             {previewImage && (
-                <div className="preview-container">
-                    <Image src={previewImage} alt="Processed Image" width={600} height={400} className="preview-img" />
-                </div>
+                <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.5 }}
+                    className="w-full max-w-2xl bg-gradient-to-r from-purple-900 via-indigo-500 to-black rounded-xl overflow-hidden shadow-xl mb-8"
+                >
+                    <Image
+                        src={previewImage}
+                        alt="Processed Image"
+                        width={600}
+                        height={400}
+                        className="w-full h-auto max-h-96 object-contain transition-transform duration-300 hover:scale-105"
+                    />
+                </motion.div>
             )}
             {downloadReady && (
                 <a
                     href={previewImage}
                     download="converted_image.png"
-                    className="btn mt-6 block w-full sm:w-auto mx-auto"
+                    className="w-full max-w-xs bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl text-center mb-4"
                 >
                     Download PNG
                 </a>
             )}
-            <Link href="/" className="btn mt-6 block w-full sm:w-auto mx-auto">
+            <Link
+                href="/"
+                className="w-full max-w-xs bg-gradient-to-r from-green-500 to-green-400 text-white py-3 px-8 rounded-lg font-semibold text-lg shadow-md transition-all duration-300 hover:-translate-y-1 hover:shadow-xl text-center"
+            >
                 Back to Home
             </Link>
         </motion.div>
